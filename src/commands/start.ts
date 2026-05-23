@@ -341,7 +341,12 @@ export async function start(args: string[] = []) {
   const webEnabled = webFlag || webPortFlag !== null || settings.web.enabled;
   const webPort = webPortFlag ?? settings.web.port;
 
-  await setupStatusline();
+  // LOCAL PATCH (grigoryosifov/forci-patches): disabled — re-adds
+  // settings.statusLine + drops .claude/statusline.cjs on every restart,
+  // clobbering the user's existing statusline. setupStatusline() and
+  // teardownStatusline() function bodies are intact; only this call site
+  // is commented out.
+  // await setupStatusline();
   await writePidFile();
   let web: WebServerHandle | null = null;
   let discordStopGateway: (() => void) | null = null;
