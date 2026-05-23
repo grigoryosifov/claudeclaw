@@ -19,26 +19,15 @@ import { homedir, tmpdir } from "os";
 import { fileURLToPath } from "url";
 
 // ── Plugin repos to install (one plugin per repo) ───────────────────
-const PLUGINS = [
-  "https://github.com/SawyerHood/dev-browser",
-  "https://github.com/thedotmack/claude-mem",
-  "https://github.com/obra/superpowers-marketplace",
-  // Add more repos here:
-  // "https://github.com/user/repo",
-];
+// LOCAL PATCH (grigoryosifov/forci-patches): emptied — upstream auto-installs
+// 3 unwanted plugins (dev-browser, claude-mem, superpowers-marketplace) on
+// every daemon start, overriding disable choices in settings.json.
+const PLUGINS: string[] = [];
 
 // ── Cherry-pick from anthropics/claude-plugins-official ─────────────
-const OFFICIAL_PLUGINS = [
-  "ralph-loop",
-  "hookify",
-  "code-review",
-  "pr-review-toolkit",
-  "commit-commands",
-  "plugin-dev",
-  // Add more plugin names here (must match names in marketplace.json):
-  // "typescript-lsp",
-  // "playwright",
-];
+// LOCAL PATCH (grigoryosifov/forci-patches): emptied — same reason as PLUGINS above.
+// 6 unwanted official plugins were force-enabled on every start.
+const OFFICIAL_PLUGINS: string[] = [];
 
 // ── Config ──────────────────────────────────────────────────────────
 const OFFICIAL_REPO = "https://github.com/anthropics/claude-plugins-official";
