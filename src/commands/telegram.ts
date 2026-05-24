@@ -1728,13 +1728,29 @@ async function registerBotCommands(token: string): Promise<void> {
       commands.push({ command: cmd, description: desc });
     }
     if (commands.length > 100) commands.length = 100;
-    try {
-      await callApi(token, "setMyCommands", { commands });
-      console.log(`  Commands registered: ${commands.length} (${commands.map((c) => "/" + c.command).join(", ")})`);
-    } catch (regErr) {
-      // Skill-generated commands may violate Telegram constraints; retry with built-in commands only
-      console.warn(`[Telegram] Full command registration failed, retrying with built-in commands only: ${regErr instanceof Error ? regErr.message : regErr}`);
-      const builtinOnly = commands.filter((c) => ["start", "reset", "compact", "status", "context", "kill", "verbose", "fork", "mode", "model", "modelhaiku", "modelsonnet", "modelopus", "modeldefault"].includes(c.command));
+    // Telegram's setMyCommands rejects the request (BOT_COMMANDS_TOO_MUCH) once the
+    // *total* serialized payload grows too large — ~9 KB in practice, which dozens of
+    // skills with 256-char descriptions exceed. Progressively shrink the per-command
+    // description cap until Telegram accepts the full menu; only fall back to built-in
+    // commands if even terse descriptions overflow.
+    const builtinNames = ["start", "reset", "compact", "status", "context", "kill", "verbose", "fork", "mode", "model", "modelhaiku", "modelsonnet", "modelopus", "modeldefault"];
+    let registered = false;
+    for (const cap of [256, 96, 64, 40]) {
+      const payload = commands.map((c) => ({ command: c.command, description: c.description.slice(0, cap) || c.command }));
+      try {
+        await callApi(token, "setMyCommands", { commands: payload });
+        console.log(`  Commands registered: ${payload.length} (description cap ${cap})`);
+        registered = true;
+        break;
+      } catch (regErr) {
+        if (cap === 256) {
+          console.warn(`[Telegram] Full menu rejected at full description length (${regErr instanceof Error ? regErr.message : regErr}); retrying with shorter descriptions`);
+        }
+      }
+    }
+    if (!registered) {
+      // Even terse descriptions overflowed — register the built-in commands only.
+      const builtinOnly = commands.filter((c) => builtinNames.includes(c.command));
       await callApi(token, "setMyCommands", { commands: builtinOnly });
       console.log(`  Commands registered (built-in only): ${builtinOnly.length}`);
     }
