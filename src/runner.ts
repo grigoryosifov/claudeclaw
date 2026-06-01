@@ -29,15 +29,16 @@ import { buildClockPromptPrefix } from "./timezone";
 import { selectModel } from "./model-router";
 import { recordResult, abortReason, clearSession, startSession } from "./watchdog";
 import { getPluginManager, type EventContext } from "./plugins";
+import { claudeClawDir } from "./paths";
 
-const LOGS_DIR = join(process.cwd(), ".claude/claudeclaw/logs");
-const ACTIVE_RUNS_FILE = join(process.cwd(), ".claude/claudeclaw/active-runs");
-const PERMISSION_MODE_FILE = join(process.cwd(), ".claude/claudeclaw/permission-mode.json");
+const LOGS_DIR = join(claudeClawDir(), "logs");
+const ACTIVE_RUNS_FILE = join(claudeClawDir(), "active-runs");
+const PERMISSION_MODE_FILE = join(claudeClawDir(), "permission-mode.json");
 // Resolve prompts relative to the claudeclaw installation, not the project dir
 const PROMPTS_DIR = join(import.meta.dir, "..", "prompts");
 const HEARTBEAT_PROMPT_FILE = join(PROMPTS_DIR, "heartbeat", "HEARTBEAT.md");
 // Project-level prompt overrides live here (gitignored, user-owned)
-const PROJECT_PROMPTS_DIR = join(process.cwd(), ".claude", "claudeclaw", "prompts");
+const PROJECT_PROMPTS_DIR = join(claudeClawDir(), "prompts");
 const PROJECT_CLAUDE_MD = join(process.cwd(), "CLAUDE.md");
 const LEGACY_PROJECT_CLAUDE_MD = join(process.cwd(), ".claude", "CLAUDE.md");
 const CLAUDECLAW_BLOCK_START = "<!-- claudeclaw:managed:start -->";

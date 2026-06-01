@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { findSessionJsonlPath } from "../../sessionFiles";
+import { claudeClawDir } from "../../paths";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -94,11 +95,10 @@ export async function getSessionUsage(channelNames?: Record<string, string>): Pr
     return usageCache.data;
   }
 
-  const cwd = process.cwd();
   const sessions: SessionUsage[] = [];
 
   // Global web session
-  const sessionFile = join(cwd, ".claude", "claudeclaw", "session.json");
+  const sessionFile = join(claudeClawDir(), "session.json");
   try {
     if (existsSync(sessionFile)) {
       const data = JSON.parse(await readFile(sessionFile, "utf-8"));
@@ -115,7 +115,7 @@ export async function getSessionUsage(channelNames?: Record<string, string>): Pr
   } catch {}
 
   // Per-channel Discord sessions
-  const sessionsFile = join(cwd, ".claude", "claudeclaw", "sessions.json");
+  const sessionsFile = join(claudeClawDir(), "sessions.json");
   try {
     if (existsSync(sessionsFile)) {
       const data = JSON.parse(await readFile(sessionsFile, "utf-8"));

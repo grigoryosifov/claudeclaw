@@ -3,6 +3,7 @@ import { join, basename } from "node:path";
 import { existsSync } from "node:fs";
 import { getAgentsDir } from "../../config";
 import { findSessionJsonlPath, getClaudeProjectDir } from "../../sessionFiles";
+import { claudeClawDir } from "../../paths";
 
 export interface SessionInfo {
   id: string;
@@ -73,9 +74,8 @@ async function peekMessages(sessionId: string): Promise<{ first: string; last: s
 }
 
 export async function listSessions(): Promise<SessionInfo[]> {
-  const cwd = process.cwd();
-  const sessionFile = join(cwd, ".claude", "claudeclaw", "session.json");
-  const sessionsFile = join(cwd, ".claude", "claudeclaw", "sessions.json");
+  const sessionFile = join(claudeClawDir(), "session.json");
+  const sessionsFile = join(claudeClawDir(), "sessions.json");
 
   const sessions: SessionInfo[] = [];
   const knownIds = new Set<string>();

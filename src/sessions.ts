@@ -2,8 +2,9 @@ import { dirname, join } from "path";
 import { unlink, readdir, rename, mkdir } from "fs/promises";
 import { getAgentsDir } from "./config";
 import { hasValidSessionId } from "./sessionValidate";
+import { claudeClawDir } from "./paths";
 
-const HEARTBEAT_DIR = join(process.cwd(), ".claude", "claudeclaw");
+const HEARTBEAT_DIR = claudeClawDir();
 const SESSION_FILE = join(HEARTBEAT_DIR, "session.json");
 
 export interface GlobalSession {

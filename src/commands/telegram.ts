@@ -13,6 +13,7 @@ import { findSessionJsonlPath } from "../sessionFiles";
 import { resolveSkillPrompt, listSkills } from "../skills";
 import { mkdir } from "node:fs/promises";
 import { extname, join } from "node:path";
+import { claudeClawDir } from "../paths";
 import { isWizardTrigger, hasActiveWizard, handleWizardInput } from "./plugin-wizard";
 
 // --- Markdown → Telegram HTML conversion (ported from nanobot) ---
@@ -811,7 +812,7 @@ async function downloadImageFromMessage(token: string, message: TelegramMessage)
   const response = await fetch(downloadUrl);
   if (!response.ok) throw new Error(`Telegram file download failed: ${response.status} ${response.statusText}`);
 
-  const dir = join(process.cwd(), ".claude", "claudeclaw", "inbox", "telegram");
+  const dir = join(claudeClawDir(), "inbox", "telegram");
   await mkdir(dir, { recursive: true });
 
   const remoteExt = extname(remotePath);
@@ -842,7 +843,7 @@ async function downloadVoiceFromMessage(token: string, message: TelegramMessage)
   const response = await fetch(downloadUrl);
   if (!response.ok) throw new Error(`Telegram file download failed: ${response.status} ${response.statusText}`);
 
-  const dir = join(process.cwd(), ".claude", "claudeclaw", "inbox", "telegram");
+  const dir = join(claudeClawDir(), "inbox", "telegram");
   await mkdir(dir, { recursive: true });
 
   const remoteExt = extname(remotePath);
@@ -890,7 +891,7 @@ async function downloadDocumentFromMessage(
     throw new Error(`Telegram file download failed: ${response.status} ${response.statusText}`);
   }
 
-  const dir = join(process.cwd(), ".claude", "claudeclaw", "inbox", "telegram");
+  const dir = join(claudeClawDir(), "inbox", "telegram");
   await mkdir(dir, { recursive: true });
 
   const originalName = doc.file_name ?? `document${extname(remotePath) || ""}`;
@@ -923,7 +924,7 @@ async function downloadMediaFromMessage(
     throw new Error(`Telegram file download failed: ${response.status} ${response.statusText}`);
   }
 
-  const dir = join(process.cwd(), ".claude", "claudeclaw", "inbox", "telegram");
+  const dir = join(claudeClawDir(), "inbox", "telegram");
   await mkdir(dir, { recursive: true });
 
   const ext = extname(media.fileName) || extname(remotePath) || "";

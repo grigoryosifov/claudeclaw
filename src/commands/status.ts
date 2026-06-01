@@ -2,9 +2,9 @@ import { join } from "path";
 import { readdir, readFile } from "fs/promises";
 import { homedir } from "os";
 import { getJobsDir, getAgentsDir, loadSettings } from "../config";
+import { claudeClawDir } from "../paths";
 
-const CLAUDE_DIR = join(process.cwd(), ".claude");
-const HEARTBEAT_DIR = join(CLAUDE_DIR, "claudeclaw");
+const HEARTBEAT_DIR = claudeClawDir();
 const PID_FILE = join(HEARTBEAT_DIR, "daemon.pid");
 const STATE_FILE = join(HEARTBEAT_DIR, "state.json");
 const SETTINGS_FILE = join(HEARTBEAT_DIR, "settings.json");

@@ -2,8 +2,9 @@ import { readFile, writeFile, chmod } from "fs/promises";
 import { existsSync } from "fs";
 import { randomBytes, timingSafeEqual } from "crypto";
 import { join } from "path";
+import { claudeClawDir } from "../paths";
 
-const TOKEN_FILE = join(process.cwd(), ".claude", "claudeclaw", "web.token");
+const TOKEN_FILE = join(claudeClawDir(), "web.token");
 
 export async function getOrCreateWebToken(): Promise<string> {
   if (existsSync(TOKEN_FILE)) {

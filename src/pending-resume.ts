@@ -1,8 +1,9 @@
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { unlink, rename } from "node:fs/promises";
+import { claudeClawDir } from "./paths";
 
-const PENDING_RESUME_PATH = join(process.cwd(), ".claude", "claudeclaw", "pending-resume.json");
+const PENDING_RESUME_PATH = join(claudeClawDir(), "pending-resume.json");
 // Consumed path: renamed before running so a crash mid-wake-up doesn't re-fire on next start
 const PENDING_RESUME_CONSUMED = PENDING_RESUME_PATH + ".consumed";
 

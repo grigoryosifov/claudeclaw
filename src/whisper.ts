@@ -4,9 +4,10 @@ import { statSync } from "node:fs";
 import { basename, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getSettings } from "./config";
+import { claudeClawDir } from "./paths";
 
 const DEFAULT_WHISPER_MODEL = "base.en";
-const WHISPER_ROOT = join(process.cwd(), ".claude", "claudeclaw", "whisper");
+const WHISPER_ROOT = join(claudeClawDir(), "whisper");
 const BIN_DIR = join(WHISPER_ROOT, "bin");
 const LIB_DIR = join(WHISPER_ROOT, "lib");
 const MODEL_FOLDER = join(WHISPER_ROOT, "models");

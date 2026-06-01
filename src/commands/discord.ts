@@ -14,6 +14,7 @@ import { transcribeAudioToText } from "../whisper";
 import { resolveSkillPrompt } from "../skills";
 import { mkdir } from "node:fs/promises";
 import { extname, join, basename, sep } from "node:path";
+import { claudeClawDir } from "../paths";
 import { isWizardTrigger, hasActiveWizard, handleWizardInput } from "./plugin-wizard";
 
 // --- Discord API constants ---
@@ -540,7 +541,7 @@ async function downloadDiscordAttachment(
   attachment: DiscordAttachment,
   type: "image" | "voice",
 ): Promise<string | null> {
-  const dir = join(process.cwd(), ".claude", "claudeclaw", "inbox", "discord");
+  const dir = join(claudeClawDir(), "inbox", "discord");
   await mkdir(dir, { recursive: true });
 
   const response = await fetch(attachment.url);

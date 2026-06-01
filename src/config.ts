@@ -4,11 +4,12 @@ import { existsSync } from "fs";
 import { normalizeTimezoneName, resolveTimezoneOffsetMinutes } from "./timezone";
 import { parseWatchdogConfig, type WatchdogConfig } from "./watchdog";
 import { parsePlugins, type PluginEntry } from "./plugins";
+import { claudeClawDir } from "./paths";
 
 /** Re-exported under the name used in the Settings interface. */
 export type WatchdogSettings = WatchdogConfig;
 
-const HEARTBEAT_DIR = join(process.cwd(), ".claude", "claudeclaw");
+const HEARTBEAT_DIR = claudeClawDir();
 const SETTINGS_FILE = join(HEARTBEAT_DIR, "settings.json");
 const DEFAULT_JOBS_DIR = join(HEARTBEAT_DIR, "jobs");
 const LOGS_DIR = join(HEARTBEAT_DIR, "logs");

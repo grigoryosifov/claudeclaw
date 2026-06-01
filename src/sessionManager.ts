@@ -1,7 +1,8 @@
 import { join } from "path";
 import { hasValidSessionId } from "./sessionValidate";
+import { claudeClawDir } from "./paths";
 
-const HEARTBEAT_DIR = join(process.cwd(), ".claude", "claudeclaw");
+const HEARTBEAT_DIR = claudeClawDir();
 const SESSIONS_FILE = join(HEARTBEAT_DIR, "sessions.json");
 
 export interface ThreadSession {
