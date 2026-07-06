@@ -90,13 +90,19 @@ const COMPACT_TIMEOUT_ENABLED = true;
  *
  * - `CLAUDECODE`: marks "we're nested inside Claude Code" — confuses the CLI's
  *   reentry detection and triggers transcript-aware behaviour we don't want.
- * - `CLAUDE_CODE_OAUTH_TOKEN`: the parent's frozen OAuth access token. Without
- *   the matching refresh token (which lives in the platform-native credential
- *   store, not the env), it expires after ~8h and the daemon's spawned `claude`
- *   processes start returning HTTP 401 silently. Stripping it lets the CLI
- *   fall back to the credential store on each platform — Keychain on macOS,
+ * - `CLAUDE_CODE_OAUTH_TOKEN`: stripped ONLY when nested inside a Claude Code
+ *   session (`CLAUDECODE` present). There it's the parent's frozen OAuth access
+ *   token: without the matching refresh token (which lives in the platform-native
+ *   credential store, not the env), it expires after ~8h and the daemon's spawned
+ *   `claude` processes start returning HTTP 401 silently. Stripping it lets the
+ *   CLI fall back to the credential store on each platform — Keychain on macOS,
  *   `~/.claude/.credentials.json` on Linux/WSL2, Credential Manager on Windows
  *   — which handles refresh automatically.
+ *   When the daemon is NOT nested (launchd/systemd/manual start), a present
+ *   `CLAUDE_CODE_OAUTH_TOKEN` is a deliberate long-lived setup-token injected by
+ *   the launcher (e.g. `claude setup-token`, ~1yr) — keep it, it's the whole
+ *   point of the injection. (LOCAL PATCH: unconditional strip broke launchd
+ *   setup-token auth — bots fell back to the ~8h Keychain token and died.)
  * - `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST`: tells the CLI "the host process
  *   manages provider auth — don't read local credentials." In a detached
  *   daemon there is no host to consult; the CLI errors with `Not logged in`.
@@ -108,9 +114,11 @@ const COMPACT_TIMEOUT_ENABLED = true;
 function cleanSpawnEnv(): Record<string, string> {
   const stripped = new Set([
     "CLAUDECODE",
-    "CLAUDE_CODE_OAUTH_TOKEN",
     "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
   ]);
+  // Only strip the OAuth token when we're actually nested inside a Claude Code
+  // session — otherwise it's a deliberate setup-token from the launcher.
+  if (process.env.CLAUDECODE) stripped.add("CLAUDE_CODE_OAUTH_TOKEN");
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (stripped.has(key)) continue;
