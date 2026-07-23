@@ -25,6 +25,31 @@ export interface Job {
   retryDelay?: number;
 }
 
+/**
+ * A job whose successful run outputs exactly this sentinel (whitespace-trimmed)
+ * is treated as "nothing to report": the result is NOT forwarded to Telegram/Discord.
+ * Lets recurring check-style jobs (health scans, watchers) stay silent on clean runs
+ * while still sending their full output when something needs attention. Failed runs
+ * (non-zero exit) always forward regardless of output, so a crashing job can't
+ * accidentally silence itself.
+ */
+export const SILENT_SENTINEL = "[silent]";
+
+/**
+ * Central gate for whether a finished job run should be forwarded to chat surfaces.
+ * Mirrors the inline notify checks it replaces, plus the silent-sentinel rule.
+ */
+export function shouldForwardJobResult(
+  notify: Job["notify"],
+  exitCode: number,
+  stdout: string
+): boolean {
+  if (notify === false) return false;
+  if (notify === "error" && exitCode === 0) return false;
+  if (exitCode === 0 && stdout.trim() === SILENT_SENTINEL) return false;
+  return true;
+}
+
 function parseFrontmatterValue(raw: string): string {
   return raw.trim().replace(/^["']|["']$/g, "");
 }

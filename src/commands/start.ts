@@ -5,7 +5,7 @@ import { fileURLToPath } from "url";
 import { run, runUserMessage, streamUserMessage, bootstrap, ensureProjectClaudeMd, loadHeartbeatPromptTemplate, isRateLimited, getRateLimitResetAt, wasRateLimitNotified, markRateLimitNotified } from "../runner";
 import { writeState, type StateData } from "../statusline";
 import { cronMatches, nextCronMatch } from "../cron";
-import { clearJobSchedule, loadJobs, snapshotJobFrontmatter } from "../jobs";
+import { clearJobSchedule, loadJobs, shouldForwardJobResult, snapshotJobFrontmatter } from "../jobs";
 import { writePidFile, cleanupPidFile, checkExistingDaemon } from "../pid";
 import { initConfig, loadSettings, reloadSettings, resolvePrompt, type HeartbeatConfig, type Settings } from "../config";
 import { getDayAndMinuteAtOffset, buildClockPromptPrefix } from "../timezone";
@@ -906,8 +906,12 @@ export async function start(args: string[] = []) {
                 console.log(`[${ts()}] Job ${job.name} exhausted ${job.retry} retries`);
               }
             }
-            if (job.notify === false) return;
-            if (job.notify === "error" && r.exitCode === 0) return;
+            if (!shouldForwardJobResult(job.notify, r.exitCode, r.stdout)) {
+              if (job.notify !== false) {
+                console.log(`[${ts()}] Job ${job.name}: output suppressed (silent sentinel or notify policy)`);
+              }
+              return;
+            }
             forwardToTelegram(job.name, r);
             forwardToDiscord(job.name, r);
           })

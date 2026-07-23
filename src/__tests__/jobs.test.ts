@@ -193,3 +193,34 @@ describe("write-protection bug validation", () => {
     expect(agentPath).not.toContain("/.claude/");
   });
 });
+
+describe("shouldForwardJobResult (silent sentinel)", () => {
+  test("notify false never forwards", async () => {
+    const { shouldForwardJobResult } = await import("../jobs");
+    expect(shouldForwardJobResult(false, 0, "report text")).toBe(false);
+    expect(shouldForwardJobResult(false, 1, "boom")).toBe(false);
+  });
+
+  test("notify error forwards only failures", async () => {
+    const { shouldForwardJobResult } = await import("../jobs");
+    expect(shouldForwardJobResult("error", 0, "all good")).toBe(false);
+    expect(shouldForwardJobResult("error", 2, "boom")).toBe(true);
+  });
+
+  test("silent sentinel suppresses clean runs", async () => {
+    const { shouldForwardJobResult, SILENT_SENTINEL } = await import("../jobs");
+    expect(shouldForwardJobResult(true, 0, SILENT_SENTINEL)).toBe(false);
+    expect(shouldForwardJobResult(true, 0, "  [silent]\n")).toBe(false);
+  });
+
+  test("sentinel does NOT suppress failed runs — a crashing job can't silence itself", async () => {
+    const { shouldForwardJobResult, SILENT_SENTINEL } = await import("../jobs");
+    expect(shouldForwardJobResult(true, 1, SILENT_SENTINEL)).toBe(true);
+  });
+
+  test("normal output forwards; sentinel embedded in a longer report does not suppress", async () => {
+    const { shouldForwardJobResult } = await import("../jobs");
+    expect(shouldForwardJobResult(true, 0, "3 failures, 2 healed")).toBe(true);
+    expect(shouldForwardJobResult(true, 0, "report mentioning [silent] mid-text")).toBe(true);
+  });
+});
