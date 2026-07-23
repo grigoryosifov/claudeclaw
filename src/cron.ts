@@ -45,7 +45,10 @@ export function nextCronMatch(expr: string, after: Date, timezoneOffsetMinutes =
   const d = new Date(after);
   d.setSeconds(0, 0);
   d.setMinutes(d.getMinutes() + 1);
-  for (let i = 0; i < 2880; i++) {
+  // Scan 8 days of minutes so any weekly schedule is reachable. The previous 48h cap
+  // made a weekly cron more than two days out fall through the loop and return the
+  // scan-end sentinel ("now + 48h"), which surfaced as a bogus nextAt in state/UI.
+  for (let i = 0; i < 8 * 24 * 60; i++) {
     if (cronMatches(expr, d, timezoneOffsetMinutes)) return d;
     d.setMinutes(d.getMinutes() + 1);
   }
