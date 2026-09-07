@@ -79,7 +79,7 @@ const DEFAULT_SETTINGS: Settings = {
     excludeWindows: [],
     forwardToTelegram: true,
   },
-  telegram: { token: "", allowedUserIds: [], listenChats: [], receiveEnabled: true, dmIsolation: "shared" },
+  telegram: { token: "", allowedUserIds: [], listenChats: [], receiveEnabled: true, dmIsolation: "shared", streaming: "edit" },
   discord: { token: "", allowedUserIds: [], listenChannels: [], listenGuilds: [], allowedGuilds: [], imageOutputRoots: [], streaming: false },
   slack: { botToken: "", appToken: "", allowedUserIds: [], listenChannels: [], allowBots: [], allowBotIds: [] },
   security: { level: "moderate", allowedTools: [], disallowedTools: [] },
@@ -118,6 +118,14 @@ export interface TelegramConfig {
    * - "perUser": each DM user gets their own isolated session.
    */
   dmIsolation: "shared" | "perUser";
+  /**
+   * How replies are previewed while Claude works.
+   * - "edit": send a placeholder message and edit it in place (default; works in every chat type).
+   * - "draft": Telegram-native message drafts (sendMessageDraft) with a Stop button — private chats only,
+   *   groups/topics fall back to "edit". The final reply is always sent as a fresh message.
+   * - "off": no live preview, only the final reply.
+   */
+  streaming: "edit" | "draft" | "off";
   /** Local whisper.cpp model for voice transcription. Default: "base.en".
    *  Supported values: tiny, base, small, medium, large-v3, large-v3-turbo (with or without .en suffix).
    *  Ignored when stt.baseUrl is configured. */
@@ -344,6 +352,7 @@ function parseSettings(
       listenChats: Array.isArray(raw.telegram?.listenChats) ? raw.telegram.listenChats.map(Number) : [],
       receiveEnabled: raw.telegram?.receiveEnabled !== false,
       dmIsolation: raw.telegram?.dmIsolation === "perUser" ? "perUser" : "shared",
+      streaming: raw.telegram?.streaming === "draft" || raw.telegram?.streaming === "off" ? raw.telegram.streaming : "edit",
       ...(typeof raw.telegram?.whisperModel === "string" && raw.telegram.whisperModel.trim()
         ? { whisperModel: raw.telegram.whisperModel.trim() }
         : {}),

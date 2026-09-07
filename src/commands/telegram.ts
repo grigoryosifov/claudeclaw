@@ -15,69 +15,12 @@ import { mkdir } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { claudeClawDir } from "../paths";
 import { isWizardTrigger, hasActiveWizard, handleWizardInput } from "./plugin-wizard";
-
-// --- Markdown → Telegram HTML conversion (ported from nanobot) ---
-
-function markdownToTelegramHtml(text: string): string {
-  if (!text) return "";
-
-  // 1. Extract and protect code blocks
-  const codeBlocks: string[] = [];
-  text = text.replace(/```[\w]*\n?([\s\S]*?)```/g, (_m, code) => {
-    codeBlocks.push(code);
-    return `\x00CB${codeBlocks.length - 1}\x00`;
-  });
-
-  // 2. Extract and protect inline code
-  const inlineCodes: string[] = [];
-  text = text.replace(/`([^`]+)`/g, (_m, code) => {
-    inlineCodes.push(code);
-    return `\x00IC${inlineCodes.length - 1}\x00`;
-  });
-
-  // 3. Strip markdown headers
-  text = text.replace(/^#{1,6}\s+(.+)$/gm, "$1");
-
-  // 4. Strip blockquotes
-  text = text.replace(/^>\s*(.*)$/gm, "$1");
-
-  // 5. Escape HTML special characters
-  text = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
-  // 6. Links [text](url) — before bold/italic to handle nested cases
-  text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
-
-  // 7. Bold **text** or __text__
-  text = text.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
-  text = text.replace(/__(.+?)__/g, "<b>$1</b>");
-
-  // 8. Italic _text_ (avoid matching inside words like some_var_name)
-  text = text.replace(/(?<![a-zA-Z0-9])_([^_]+)_(?![a-zA-Z0-9])/g, "<i>$1</i>");
-
-  // 9. Strikethrough ~~text~~
-  text = text.replace(/~~(.+?)~~/g, "<s>$1</s>");
-
-  // 10. Bullet lists
-  text = text.replace(/^[-*]\s+/gm, "• ");
-
-  // 11. Restore inline code with HTML tags
-  for (let i = 0; i < inlineCodes.length; i++) {
-    const escaped = inlineCodes[i].replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    text = text.replace(`\x00IC${i}\x00`, `<code>${escaped}</code>`);
-  }
-
-  // 12. Restore code blocks with HTML tags
-  for (let i = 0; i < codeBlocks.length; i++) {
-    const escaped = codeBlocks[i].replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    text = text.replace(`\x00CB${i}\x00`, `<pre><code>${escaped}</code></pre>`);
-  }
-
-  return text;
-}
+import { callApi, TELEGRAM_API_BASE as API_BASE } from "../telegramApi";
+import { markdownToTelegramHtml, normalizeTelegramText, renderTelegramChunks } from "../telegramText";
+import { deliverFinalReply, resolveStreamingMode, sendChunks, type StreamingMode, type TelegramApiCall } from "../telegramDeliver";
 
 // --- Telegram Bot API (raw fetch, zero deps) ---
 
-const API_BASE = "https://api.telegram.org/bot";
 const FILE_API_BASE = "https://api.telegram.org/file/bot";
 
 interface TelegramUser {
@@ -201,6 +144,12 @@ interface TelegramCallbackQuery {
   data?: string;
 }
 
+interface TelegramMessageGenerationStopped {
+  chat: { id: number; type: string };
+  message_thread_id?: number;
+  draft_id: number;
+}
+
 interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
@@ -209,6 +158,7 @@ interface TelegramUpdate {
   edited_channel_post?: TelegramMessage;
   my_chat_member?: TelegramMyChatMemberUpdate;
   callback_query?: TelegramCallbackQuery;
+  stopped_message_generation?: TelegramMessageGenerationStopped;
 }
 
 interface TelegramMe {
@@ -226,10 +176,6 @@ let telegramDebug = false;
 function debugLog(message: string): void {
   if (!telegramDebug) return;
   console.log(`[Telegram][debug] ${message}`);
-}
-
-function normalizeTelegramText(text: string): string {
-  return text.replace(/[\u2010-\u2015\u2212]/g, "-");
 }
 
 function getMessageTextAndEntities(message: TelegramMessage): {
@@ -382,43 +328,15 @@ function extractTelegramCommand(text: string): string | null {
   return firstToken.split("@", 1)[0].toLowerCase();
 }
 
-async function callApi<T>(token: string, method: string, body?: Record<string, unknown>): Promise<T> {
-  // Add 15s buffer on top of Telegram's own long-poll timeout (default 30s)
-  const telegramTimeout = (body?.timeout as number | undefined) ?? 0;
-  const httpTimeout = Math.max(30_000, (telegramTimeout + 15) * 1000);
-  const res = await fetch(`${API_BASE}${token}/${method}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(httpTimeout),
-  });
-  if (!res.ok) {
-    throw new Error(`Telegram API ${method}: ${res.status} ${res.statusText}`);
-  }
-  return (await res.json()) as T;
+/** Bind the Bot API to a token — the shape the delivery helpers take. */
+function bindApi(token: string): TelegramApiCall {
+  return <T,>(method: string, body: Record<string, unknown>, options?: { retries?: number }) =>
+    callApi<T>(token, method, body, options);
 }
 
+/** Send text to a chat, split at line boundaries into ≤4096-char pieces; HTML with a plain-text fallback per piece. */
 async function sendMessage(token: string, chatId: number, text: string, threadId?: number): Promise<void> {
-  const normalized = normalizeTelegramText(text).replace(/\[react:[^\]\r\n]+\]/gi, "");
-  const html = markdownToTelegramHtml(normalized);
-  const MAX_LEN = 4096;
-  for (let i = 0; i < html.length; i += MAX_LEN) {
-    try {
-      await callApi(token, "sendMessage", {
-        chat_id: chatId,
-        text: html.slice(i, i + MAX_LEN),
-        parse_mode: "HTML",
-        ...(threadId ? { message_thread_id: threadId } : {}),
-      });
-    } catch {
-      // Fallback to plain text if HTML parsing fails
-      await callApi(token, "sendMessage", {
-        chat_id: chatId,
-        text: normalized.slice(i, i + MAX_LEN),
-        ...(threadId ? { message_thread_id: threadId } : {}),
-      });
-    }
-  }
+  await sendChunks(bindApi(token), chatId, threadId, renderTelegramChunks(text), 2);
 }
 
 async function sendTyping(token: string, chatId: number, threadId?: number): Promise<void> {
@@ -466,19 +384,37 @@ const MODEL_HAIKU = "claude-haiku-4-5-20251001";
 const MODEL_SONNET = "claude-sonnet-4-6";
 const MODEL_OPUS = "claude-opus-4-7";
 
+/** Draft ids of in-flight draft-mode replies per chat — lets a Stop-button update find the run it belongs to. */
+const activeDrafts = new Map<number, number>();
+/** Chats whose running reply was stopped via the draft's Stop button (reported as "Stopped", not as an error). */
+const stoppedByUser = new Set<number>();
+
 /**
- * Build a streaming callback using editMessageText.
- * On first chunk: send a placeholder message to get message_id.
- * On subsequent chunks (throttled): edit that message with accumulated plain text.
+ * Build a streaming callback.
+ * - "edit": on the first chunk send a placeholder message, then edit it (throttled) with the accumulated
+ *   plain text; deliverFinalReply later edits the final formatted reply into that message.
+ * - "draft": stream through Telegram's native sendMessageDraft (ephemeral, animated, with a Stop button).
+ *   No real message exists until the final reply is sent fresh, so a dropped edit can never strand a half-reply.
+ * - "off": no live preview.
  * In verbose mode, tool call/result lines appear above the text response.
  */
 function makeStreamCallback(
   token: string,
   chatId: number,
   threadId: number | undefined,
-  options: { intervalMs?: number; verbose?: boolean } = {}
-): { onChunk: (text: string) => void; onToolEvent: (line: string) => void; waitForStreamMsg: () => Promise<{ msgId: number | null; hadToolLines: boolean }> } {
-  const { intervalMs = 500, verbose = false } = options;
+  options: { intervalMs?: number; verbose?: boolean; mode?: StreamingMode } = {}
+): {
+  start: () => void;
+  onChunk: (text: string) => void;
+  onToolEvent: (line: string) => void;
+  waitForStreamMsg: () => Promise<{ msgId: number | null; hadToolLines: boolean }>;
+} {
+  const { intervalMs = 500, verbose = false, mode = "edit" } = options;
+  // Draft-mode state (unused in the other modes)
+  const draftId = mode === "draft" ? (((Date.now() ^ Math.floor(Math.random() * 0x7fffffff)) & 0x7fffffff) || 1) : 0;
+  let lastDraft = "";
+  let draftWarned = false;
+  let keepAlive: ReturnType<typeof setInterval> | null = null;
   let textAcc = "";
   const toolLines: string[] = [];
   let lastSentAt = 0;
@@ -523,7 +459,35 @@ function makeStreamCallback(
     }).catch(() => {});
   };
 
+  const sendDraft = (display: string) => {
+    if (finalized) return;
+    lastDraft = display;
+    lastSentAt = Date.now();
+    callApi(token, "sendMessageDraft", {
+      chat_id: chatId,
+      draft_id: draftId,
+      text: display.slice(0, 4096),
+      can_stop: true,
+      ...(threadId ? { message_thread_id: threadId } : {}),
+    }).catch((err) => {
+      if (draftWarned) return;
+      draftWarned = true;
+      console.error(`[Telegram] sendMessageDraft failed for chat ${chatId}: ${err instanceof Error ? err.message : err}`);
+    });
+  };
+
+  const draftDisplay = () => {
+    if (verbose) return getDisplay();
+    // A draft renders the whole reply as it grows; keep the tail once it outgrows one message.
+    return textAcc.length > 4000 ? `[...]\n${textAcc.slice(-4000)}` : textAcc;
+  };
+
   const flush = async () => {
+    if (mode === "draft") {
+      const display = draftDisplay();
+      if (display) sendDraft(display);
+      return;
+    }
     const display = verbose ? getDisplay() : textAcc;
     if (!display) return;
     lastSentAt = Date.now();
@@ -551,7 +515,18 @@ function makeStreamCallback(
     }
   };
 
+  const start = () => {
+    if (mode !== "draft") return;
+    activeDrafts.set(chatId, draftId);
+    sendDraft(""); // empty text = Telegram's native "Thinking…" placeholder
+    // Drafts expire after ~30s of silence (long tool phases): re-send the last one to keep it alive.
+    keepAlive = setInterval(() => {
+      if (!finalized && Date.now() - lastSentAt >= 15_000) sendDraft(lastDraft);
+    }, 5_000);
+  };
+
   const onChunk = (text: string) => {
+    if (mode === "off") return;
     textAcc += text;
     const now = Date.now();
     if (now - lastSentAt >= intervalMs) {
@@ -563,7 +538,7 @@ function makeStreamCallback(
   };
 
   const onToolEvent = (line: string) => {
-    if (!verbose) return;
+    if (!verbose || mode === "off") return;
     toolLines.push(line);
     // Use same throttle logic as onChunk to avoid spamming the API
     const now = Date.now();
@@ -577,12 +552,23 @@ function makeStreamCallback(
 
   const waitForStreamMsg = async (): Promise<{ msgId: number | null; hadToolLines: boolean }> => {
     if (timer) { clearTimeout(timer); timer = null; }
+    if (keepAlive) { clearInterval(keepAlive); keepAlive = null; }
     if (initPromise) await initPromise;
     finalized = true;
+    if (mode === "draft" && activeDrafts.get(chatId) === draftId) activeDrafts.delete(chatId);
     return { msgId: streamMsgId, hadToolLines: toolLines.length > 0 };
   };
 
-  return { onChunk, onToolEvent, waitForStreamMsg };
+  return { start, onChunk, onToolEvent, waitForStreamMsg };
+}
+
+/** The user pressed Stop on a draft-mode reply: kill the run behind that draft. */
+function handleStoppedGeneration(evt: TelegramMessageGenerationStopped): void {
+  const chatId = evt.chat.id;
+  if (activeDrafts.get(chatId) !== evt.draft_id) return; // stale or unknown draft — nothing to stop
+  const killed = killActive();
+  if (killed) stoppedByUser.add(chatId);
+  console.log(`[Telegram] Stop pressed in chat ${chatId} — ${killed ? "killed the active run" : "no active run"}`);
 }
 
 function extractReactionDirective(text: string): { cleanedText: string; reactionEmoji: string | null } {
@@ -739,34 +725,13 @@ async function sendMessageWithButtons(
   threadId?: number
 ): Promise<void> {
   const body = text.trim() || "\u200B"; // zero-width space when text is empty (buttons-only)
-  const normalized = normalizeTelegramText(body).replace(/\[react:[^\]\r\n]+\]/gi, "");
-  const html = markdownToTelegramHtml(normalized);
   const inline_keyboard = buttonRows.map((row) =>
     row.map((label) => ({ text: label, callback_data: makeButtonId(label) }))
   );
-  const MAX_LEN = 4096;
   // Send all chunks except the last without buttons; attach buttons only to the final chunk.
-  for (let i = 0; i < html.length; i += MAX_LEN) {
-    const isLast = i + MAX_LEN >= html.length;
-    const replyMarkup = isLast ? { inline_keyboard } : undefined;
-    try {
-      await callApi(token, "sendMessage", {
-        chat_id: chatId,
-        text: html.slice(i, i + MAX_LEN),
-        parse_mode: "HTML",
-        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-        ...(threadId ? { message_thread_id: threadId } : {}),
-      });
-    } catch {
-      // Fallback to plain text if HTML parse fails
-      await callApi(token, "sendMessage", {
-        chat_id: chatId,
-        text: normalized.slice(i, i + MAX_LEN),
-        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-        ...(threadId ? { message_thread_id: threadId } : {}),
-      });
-    }
-  }
+  await sendChunks(bindApi(token), chatId, threadId, renderTelegramChunks(body), 2, (isLast) =>
+    isLast ? { reply_markup: { inline_keyboard } } : {}
+  );
 }
 
 let botUsername: string | null = null;
@@ -1461,19 +1426,23 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     const modelOverride = chatModels.get(chatId);
     let result;
     let streamMsgId: number | null = null;
-    let hadToolLines = false;
     if (busy) {
       await sendMessage(config.token, chatId, "Claude is busy — try again in a moment, or use /fork for a quick parallel task.", threadId);
       return;
     } else {
-      const stream = makeStreamCallback(config.token, chatId, threadId, { verbose });
+      const stream = makeStreamCallback(config.token, chatId, threadId, {
+        verbose,
+        mode: resolveStreamingMode(config.streaming, isPrivate),
+      });
+      stream.start();
       result = await runUserMessage("telegram", prefixedPrompt, sessionKey, undefined, stream.onChunk, stream.onToolEvent, modelOverride);
       const streamResult = await stream.waitForStreamMsg();
       streamMsgId = streamResult.msgId;
-      hadToolLines = streamResult.hadToolLines;
     }
 
-    if (result.exitCode !== 0) {
+    if (result.exitCode !== 0 && stoppedByUser.delete(chatId)) {
+      await sendMessage(config.token, chatId, "⏹ Stopped.", threadId);
+    } else if (result.exitCode !== 0) {
       const isTimedOut = result.exitCode === 124;
       const errorMsg = isTimedOut
         ? `⏱ Request timed out — the subprocess took too long and was killed. Try again or split into smaller steps.`
@@ -1517,38 +1486,24 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
           }).catch(() => {});
         }
         await sendMessageWithButtons(config.token, chatId, cleanedText, buttonRows, threadId);
-      } else if (streamMsgId) {
-        if (isDirectiveOnly) {
-          // The attachment (file / voice) IS the response — delete the stream
-          // preview so the user doesn't see "(empty response)" as a stray message.
-          await callApi(config.token, "deleteMessage", {
-            chat_id: chatId, message_id: streamMsgId,
-          }).catch(() => {});
-        } else {
-          // Normal text response: edit stream with final formatted HTML.
-          // editStream() already set the message to the correct plain text, so if
-          // all edits fail ("message is not modified") do NOT send a new message —
-          // the user already sees the correct content and a sendMessage would duplicate.
-          const finalText = cleanedText || "(empty response)";
-          const html = markdownToTelegramHtml(normalizeTelegramText(finalText));
-          await callApi(config.token, "editMessageText", {
-            chat_id: chatId, message_id: streamMsgId,
-            text: html.slice(0, 4096), parse_mode: "HTML",
-          }).catch(() => callApi(config.token, "editMessageText", {
-            chat_id: chatId, message_id: streamMsgId,
-            text: finalText.slice(0, 4096),
-          }).catch(() => {
-            // If all edits fail and the stream message has tool output (verbose),
-            // send the final response as a new message. But if there were no tool
-            // lines, the stream message already shows the correct text — "not
-            // modified" just means it's already right, so don't send a duplicate.
-            if (verbose && hadToolLines) {
-              return sendMessage(config.token, chatId, finalText, threadId);
-            }
-          }));
-        }
-      } else if (cleanedText) {
-        await sendMessage(config.token, chatId, cleanedText, threadId);
+      } else if (streamMsgId && isDirectiveOnly) {
+        // The attachment (file / voice) IS the response — delete the stream
+        // preview so the user doesn't see "(empty response)" as a stray message.
+        await callApi(config.token, "deleteMessage", {
+          chat_id: chatId, message_id: streamMsgId,
+        }).catch(() => {});
+      } else if (streamMsgId || cleanedText) {
+        // Normal text response: edit the preview into the final formatted reply, or send it
+        // fresh when there is no preview or the edit fails for a real reason. Long replies
+        // continue as further messages instead of being cut at 4096.
+        await deliverFinalReply({
+          api: bindApi(config.token),
+          chatId,
+          threadId,
+          streamMsgId,
+          text: cleanedText || "(empty response)",
+          log: (line) => console.error(line),
+        });
       }
       for (const fp of filePaths) {
         try {
@@ -1797,7 +1752,7 @@ async function poll(generation: number): Promise<void> {
       const data = await callApi<{ ok: boolean; result: TelegramUpdate[] }>(
         config.token,
         "getUpdates",
-        { offset, timeout: 30, allowed_updates: ["message", "my_chat_member", "callback_query"] }
+        { offset, timeout: 30, allowed_updates: ["message", "my_chat_member", "callback_query", "stopped_message_generation"] }
       );
 
       // Check generation after the in-flight long-poll request returns.
@@ -1830,6 +1785,9 @@ async function poll(generation: number): Promise<void> {
           handleCallbackQuery(update.callback_query).catch((err) => {
             console.error(`[Telegram] callback_query unhandled: ${err}`);
           });
+        }
+        if (update.stopped_message_generation) {
+          handleStoppedGeneration(update.stopped_message_generation);
         }
       }
     } catch (err) {
