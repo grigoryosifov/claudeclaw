@@ -147,7 +147,8 @@ interface TelegramCallbackQuery {
 interface TelegramMessageGenerationStopped {
   chat: { id: number; type: string };
   message_thread_id?: number;
-  draft_id: number;
+  /** Documented as Integer; observed on the wire as a numeric string (09.09.2026). */
+  draft_id: number | string;
 }
 
 interface TelegramUpdate {
@@ -469,6 +470,8 @@ function makeStreamCallback(
       text: display.slice(0, 4096),
       can_stop: true,
       ...(threadId ? { message_thread_id: threadId } : {}),
+    }, { retries: 1 }).then(() => {
+      draftWarned = false;
     }).catch((err) => {
       if (draftWarned) return;
       draftWarned = true;
@@ -515,14 +518,22 @@ function makeStreamCallback(
     }
   };
 
+  // Placeholder shown until the first text chunk. A literal label rather than Telegram's
+  // empty-text "Thinking…": clients differ in how they render an EMPTY draft (macOS 12.10 draws a
+  // bare bubble). Sent once; the client's own dot animation is client-specific and not relied on.
+  const PLACEHOLDER = "Thinking...";
+
   const start = () => {
     if (mode !== "draft") return;
     activeDrafts.set(chatId, draftId);
-    sendDraft(""); // empty text = Telegram's native "Thinking…" placeholder
-    // Drafts expire after ~30s of silence (long tool phases): re-send the last one to keep it alive.
+    sendDraft(PLACEHOLDER);
+    // A draft is a typing-style input activity: iOS/macOS clients (TelegramCore) drop every
+    // activity 8s after the last update, Desktop after 30s, and a same-id re-send is an in-place
+    // refresh. Telegram's own apps refresh activities every 5s — so during silence (tool phases,
+    // model pauses) the last draft is re-sent every 4s, exactly as the clients do it.
     keepAlive = setInterval(() => {
-      if (!finalized && Date.now() - lastSentAt >= 15_000) sendDraft(lastDraft);
-    }, 5_000);
+      if (!finalized && lastDraft && Date.now() - lastSentAt >= 4_000) sendDraft(lastDraft);
+    }, 2_000);
   };
 
   const onChunk = (text: string) => {
@@ -565,10 +576,16 @@ function makeStreamCallback(
 /** The user pressed Stop on a draft-mode reply: kill the run behind that draft. */
 function handleStoppedGeneration(evt: TelegramMessageGenerationStopped): void {
   const chatId = evt.chat.id;
-  if (activeDrafts.get(chatId) !== evt.draft_id) return; // stale or unknown draft — nothing to stop
+  const active = activeDrafts.get(chatId);
+  // Telegram delivers draft_id as a JSON string in this update (the method takes an Integer) — compare numerically.
+  const draftId = Number(evt.draft_id);
+  if (active === undefined || active !== draftId) {
+    console.log(`[Telegram] Stop pressed in chat ${chatId} for draft ${draftId}, but the active draft is ${active ?? "none"} — ignored`);
+    return;
+  }
   const killed = killActive();
   if (killed) stoppedByUser.add(chatId);
-  console.log(`[Telegram] Stop pressed in chat ${chatId} — ${killed ? "killed the active run" : "no active run"}`);
+  console.log(`[Telegram] Stop pressed in chat ${chatId} (draft ${evt.draft_id}) — ${killed ? "killed the active run" : "no active run"}`);
 }
 
 function extractReactionDirective(text: string): { cleanedText: string; reactionEmoji: string | null } {
@@ -1788,6 +1805,11 @@ async function poll(generation: number): Promise<void> {
         }
         if (update.stopped_message_generation) {
           handleStoppedGeneration(update.stopped_message_generation);
+        }
+        if (
+          incomingMessages.length === 0 && !update.my_chat_member && !update.callback_query && !update.stopped_message_generation
+        ) {
+          console.log(`[Telegram] Update ${update.update_id} of an unhandled type: ${Object.keys(update).filter((k) => k !== "update_id").join(",")}`);
         }
       }
     } catch (err) {
