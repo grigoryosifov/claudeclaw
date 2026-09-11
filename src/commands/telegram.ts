@@ -1,4 +1,5 @@
-import { ensureProjectClaudeMd, run, runUserMessage, runFork, killActive, isMainBusy, compactCurrentSession, compactCurrentThreadSession, isRateLimited, getRateLimitResetAt, getPermissionMode, setPermissionMode, type PermissionMode } from "../runner";
+import { ensureProjectClaudeMd, run, runUserMessage, runFork, killActive, compactCurrentSession, compactCurrentThreadSession, isRateLimited, getRateLimitResetAt, getPermissionMode, setPermissionMode, type PermissionMode } from "../runner";
+import { laneDepth } from "../queue";
 import { wrapUntrusted } from "../prompt-safety";
 import { isAllowed } from "../allowlist";
 import { extractErrorDetail } from "../messaging";
@@ -1438,24 +1439,31 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
       );
     }
     const prefixedPrompt = promptParts.join("\n");
-    const busy = isMainBusy();
     const verbose = verboseChats.has(chatId);
     const modelOverride = chatModels.get(chatId);
     let result;
     let streamMsgId: number | null = null;
-    if (busy) {
-      await sendMessage(config.token, chatId, "Claude is busy — try again in a moment, or use /fork for a quick parallel task.", threadId);
-      return;
-    } else {
-      const stream = makeStreamCallback(config.token, chatId, threadId, {
-        verbose,
-        mode: resolveStreamingMode(config.streaming, isPrivate),
-      });
-      stream.start();
-      result = await runUserMessage("telegram", prefixedPrompt, sessionKey, undefined, stream.onChunk, stream.onToolEvent, modelOverride);
-      const streamResult = await stream.waitForStreamMsg();
-      streamMsgId = streamResult.msgId;
+    // A message that lands while this chat's lane is busy is QUEUED behind it, never dropped:
+    // the lane resumes the same session in arrival order, so the follow-up reaches Claude with the
+    // current reply already in its memory. Say so — a silent wait reads as "ignored" from a phone.
+    const ahead = laneDepth(sessionKey);
+    if (ahead > 0) {
+      const behind = ahead === 1 ? "the current reply" : `${ahead} replies`;
+      await sendMessage(
+        config.token,
+        chatId,
+        `⏳ Got it — queued behind ${behind}, I'll take it next. (/fork answers a quick question in parallel, /kill aborts the current run.)`,
+        threadId
+      );
     }
+    const stream = makeStreamCallback(config.token, chatId, threadId, {
+      verbose,
+      mode: resolveStreamingMode(config.streaming, isPrivate),
+    });
+    // The "Thinking…" placeholder starts when the run does (onStart), not while the message waits its turn.
+    result = await runUserMessage("telegram", prefixedPrompt, sessionKey, undefined, stream.onChunk, stream.onToolEvent, modelOverride, stream.start);
+    const streamResult = await stream.waitForStreamMsg();
+    streamMsgId = streamResult.msgId;
 
     if (result.exitCode !== 0 && stoppedByUser.delete(chatId)) {
       await sendMessage(config.token, chatId, "⏹ Stopped.", threadId);

@@ -17,6 +17,7 @@ import {
   backupSession,
 } from "./sessions";
 import { needsRotation, rotateSession, loadLatestSummary } from "./rotation";
+import { enqueue } from "./queue";
 import {
   getThreadSession,
   createThreadSession,
@@ -251,13 +252,7 @@ export function markRateLimitNotified(): void {
   rateLimitNotified = true;
 }
 
-// Serial queue — prevents concurrent --resume on the same session
-// Global queue for non-thread messages (backward compatible)
-// Reset to a fresh resolved promise after each task to avoid holding
-// references to every previous result (memory leak).
-let globalQueue: Promise<unknown> = Promise.resolve();
-// Per-thread queues — each thread runs independently in parallel
-const threadQueues = new Map<string, Promise<unknown>>();
+// Serial run lanes (main lane + per-thread lanes) live in ./queue — `enqueue` is imported above.
 
 // Counter of concurrently-running main-queue sessions (per-thread queues run in parallel)
 let mainRunCount = 0;
@@ -272,18 +267,6 @@ function persistRunCount(): void {
     mkdirSync(dirname(ACTIVE_RUNS_FILE), { recursive: true });
     writeFileSync(ACTIVE_RUNS_FILE, String(mainRunCount));
   } catch {}
-}
-
-function enqueue<T>(fn: () => Promise<T>, threadId?: string): Promise<T> {
-  if (threadId) {
-    const current = threadQueues.get(threadId) ?? Promise.resolve();
-    const task = current.then(fn, fn);
-    threadQueues.set(threadId, task.then(() => {}, () => {}));
-    return task;
-  }
-  const task = globalQueue.then(fn, fn);
-  globalQueue = task.then(() => {}, () => {});
-  return task;
 }
 
 // Track active main-queue subprocesses so /kill targets them exclusively.
@@ -1037,10 +1020,14 @@ async function execClaude(
   agentName?: string,
   timeoutCategory?: string,
   onChunk?: (text: string) => void,
-  onToolEvent?: (line: string) => void
+  onToolEvent?: (line: string) => void,
+  onStart?: () => void
 ): Promise<RunResult> {
   mainRunCount++;
   persistRunCount();
+  // Fires when the run actually begins. A message queued behind another run waits in the lane
+  // before reaching this point, so callers can hold their "Thinking…" placeholder until now.
+  onStart?.();
   try {
   await mkdir(LOGS_DIR, { recursive: true });
 
@@ -1448,9 +1435,10 @@ export async function run(
   agentName?: string,
   timeoutCategory?: string,
   onChunk?: (text: string) => void,
-  onToolEvent?: (line: string) => void
+  onToolEvent?: (line: string) => void,
+  onStart?: () => void
 ): Promise<RunResult> {
-  return enqueue(() => execClaude(name, prompt, threadId, modelOverride, timeoutMs, agentName, timeoutCategory, onChunk, onToolEvent), threadId);
+  return enqueue(() => execClaude(name, prompt, threadId, modelOverride, timeoutMs, agentName, timeoutCategory, onChunk, onToolEvent, onStart), threadId);
 }
 
 async function streamClaude(
@@ -1685,9 +1673,10 @@ export async function runUserMessage(
   agentName?: string,
   onChunk?: (text: string) => void,
   onToolEvent?: (line: string) => void,
-  modelOverride?: string
+  modelOverride?: string,
+  onStart?: () => void
 ): Promise<RunResult> {
-  return run(name, prefixUserMessageWithClock(prompt), threadId, modelOverride, undefined, agentName, undefined, onChunk, onToolEvent);
+  return run(name, prefixUserMessageWithClock(prompt), threadId, modelOverride, undefined, agentName, undefined, onChunk, onToolEvent, onStart);
 }
 
 // Path where Claude Code stores session JSONL transcripts for this project
