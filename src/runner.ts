@@ -31,6 +31,7 @@ import { selectModel } from "./model-router";
 import { recordResult, abortReason, clearSession, startSession } from "./watchdog";
 import { getPluginManager, type EventContext } from "./plugins";
 import { claudeClawDir } from "./paths";
+import { readBotIdentity } from "./botIdentity";
 
 const LOGS_DIR = join(claudeClawDir(), "logs");
 const ACTIVE_RUNS_FILE = join(claudeClawDir(), "active-runs");
@@ -1105,11 +1106,16 @@ async function execClaude(
   // Build the appended system prompt: CLAUDE.md + directory scoping
   // This is passed on EVERY invocation (not just new sessions) because
   // --append-system-prompt does not persist across --resume.
-  // Prompt files (IDENTITY.md, USER.md, SOUL.md) are already embedded in
-  // CLAUDE.md by ensureProjectClaudeMd(), which runs before every call.
+  // Install-level prompt files (IDENTITY.md, USER.md, SOUL.md under the repo's
+  // prompts/) are already embedded in CLAUDE.md by ensureProjectClaudeMd(), which
+  // runs before every call. The PER-BOT identity (<CLAUDECLAW_HOME>/prompts/IDENTITY.md)
+  // is appended here instead, so sibling bots sharing one cwd each know who they are.
   const appendParts: string[] = [
     "You are running inside ClaudeClaw.",
   ];
+
+  const botIdentity = readBotIdentity(PROJECT_PROMPTS_DIR);
+  if (botIdentity) appendParts.push(botIdentity);
 
   if (rotationSummary) appendParts.push(`Context from the previous session:\n\n${rotationSummary}`);
 
@@ -1477,6 +1483,9 @@ async function streamClaude(
   if (existing) args.push("--resume", existing.sessionId);
 
   const appendParts: string[] = ["You are running inside ClaudeClaw."];
+
+  const streamBotIdentity = readBotIdentity(PROJECT_PROMPTS_DIR);
+  if (streamBotIdentity) appendParts.push(streamBotIdentity);
 
   if (streamRotationSummary) appendParts.push(`Context from the previous session:\n\n${streamRotationSummary}`);
 
