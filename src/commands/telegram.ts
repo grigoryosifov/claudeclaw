@@ -384,7 +384,7 @@ const verboseChats = new Set<number>();
 const chatModels = new Map<number, string>();
 const MODEL_HAIKU = "claude-haiku-4-5-20251001";
 const MODEL_SONNET = "claude-sonnet-4-6";
-const MODEL_OPUS = "claude-opus-4-7";
+const MODEL_OPUS = "claude-opus-5-5";
 
 /** Draft ids of in-flight draft-mode replies per chat — lets a Stop-button update find the run it belongs to. */
 const activeDrafts = new Map<number, number>();
