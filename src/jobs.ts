@@ -23,6 +23,70 @@ export interface Job {
   retry?: number;
   /** Seconds to wait between retry attempts. Defaults to 300 (5 min). */
   retryDelay?: number;
+  /**
+   * Shell command run (bash -c, in the daemon's cwd and process) before each scheduled run.
+   * Exit 0 → Claude runs, with the command's stdout appended to the prompt; exit 1 → the tick
+   * is skipped silently and costs nothing; any other exit or a timeout → logged as an ERROR and
+   * skipped. Lets a frequent watcher job wake Claude only when there is work.
+   */
+  precheck?: string;
+  /** Seconds before the precheck is killed. Defaults to 300. */
+  precheckTimeoutSeconds?: number;
+  /**
+   * When true, every run starts a brand-new Claude session instead of resuming the job's
+   * thread, so a frequent job never accumulates context. Ignored for agent-scoped jobs,
+   * whose session is the agent's own.
+   */
+  freshSession?: boolean;
+}
+
+export const DEFAULT_PRECHECK_TIMEOUT_SECONDS = 300;
+
+export interface PrecheckResult {
+  decision: "run" | "skip" | "error";
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+}
+
+/** Run a job's precheck command and classify the outcome (see Job.precheck). */
+export async function runPrecheck(
+  command: string,
+  timeoutMs: number,
+  cwd: string = process.cwd()
+): Promise<PrecheckResult> {
+  const proc = Bun.spawn(["/bin/bash", "-c", command], {
+    cwd,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    proc.kill("SIGKILL");
+  }, timeoutMs);
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  const exitCode = await proc.exited;
+  clearTimeout(timer);
+  const decision: PrecheckResult["decision"] = timedOut
+    ? "error"
+    : exitCode === 0
+    ? "run"
+    : exitCode === 1
+    ? "skip"
+    : "error";
+  return { decision, exitCode: timedOut ? null : exitCode, stdout, stderr, timedOut };
+}
+
+/** The prompt a job runs with after a passing precheck: its stdout is appended as context. */
+export function promptWithPrecheckOutput(prompt: string, precheckStdout: string): string {
+  const out = precheckStdout.trim();
+  return out ? `${prompt}\n\nPrecheck output:\n${out}` : prompt;
 }
 
 /**
@@ -121,7 +185,24 @@ function parseJobFile(name: string, content: string): Job | null {
   const retryDelayLine = lines.find((l) => l.startsWith("retry_delay:"));
   const retryDelay = retryDelayLine ? parseInt(parseFrontmatterValue(retryDelayLine.replace("retry_delay:", "")), 10) || undefined : undefined;
 
-  return { name, schedule, prompt, recurring, notify, model, timeoutSeconds, agent, label, enabled, retry, retryDelay };
+  const precheckLine = lines.find((l) => l.startsWith("precheck:"));
+  const precheck = precheckLine ? parseFrontmatterValue(precheckLine.replace("precheck:", "")) || undefined : undefined;
+
+  const precheckTimeoutLine = lines.find((l) => l.startsWith("precheck_timeout:"));
+  const precheckTimeoutParsed = precheckTimeoutLine
+    ? parseInt(parseFrontmatterValue(precheckTimeoutLine.replace("precheck_timeout:", "")), 10)
+    : NaN;
+  const precheckTimeoutSeconds =
+    Number.isFinite(precheckTimeoutParsed) && precheckTimeoutParsed > 0 ? precheckTimeoutParsed : undefined;
+
+  const freshLine = lines.find((l) => l.startsWith("fresh_session:"));
+  const freshRaw = freshLine ? parseFrontmatterValue(freshLine.replace("fresh_session:", "")).toLowerCase() : "";
+  const freshSession = freshRaw === "true" || freshRaw === "yes" || freshRaw === "1" ? true : undefined;
+
+  return {
+    name, schedule, prompt, recurring, notify, model, timeoutSeconds, agent, label, enabled, retry, retryDelay,
+    precheck, precheckTimeoutSeconds, freshSession,
+  };
 }
 
 export async function loadJobs(): Promise<Job[]> {

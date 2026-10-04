@@ -5,7 +5,8 @@ import { fileURLToPath } from "url";
 import { run, runUserMessage, streamUserMessage, bootstrap, ensureProjectClaudeMd, loadHeartbeatPromptTemplate, isRateLimited, getRateLimitResetAt, wasRateLimitNotified, markRateLimitNotified } from "../runner";
 import { writeState, type StateData } from "../statusline";
 import { cronMatches, nextCronMatch } from "../cron";
-import { clearJobSchedule, loadJobs, shouldForwardJobResult, snapshotJobFrontmatter } from "../jobs";
+import { clearJobSchedule, loadJobs, shouldForwardJobResult, snapshotJobFrontmatter, runPrecheck, promptWithPrecheckOutput, DEFAULT_PRECHECK_TIMEOUT_SECONDS } from "../jobs";
+import { removeThreadSession } from "../sessionManager";
 import { writePidFile, cleanupPidFile, checkExistingDaemon } from "../pid";
 import { initConfig, loadSettings, reloadSettings, resolvePrompt, type HeartbeatConfig, type Settings } from "../config";
 import { getDayAndMinuteAtOffset, buildClockPromptPrefix } from "../timezone";
@@ -866,16 +867,52 @@ export async function start(args: string[] = []) {
 
   updateState();
 
+  // Jobs whose precheck is still running: a slow precheck must not stack up on the next tick.
+  const precheckInFlight = new Set<string>();
+
   function runJob(job: (typeof currentJobs)[0]) {
+    if (!job.precheck) {
+      startJobRun(job, "");
+      return;
+    }
+    if (precheckInFlight.has(job.name)) {
+      console.log(`[${ts()}] Job ${job.name}: previous precheck still running, tick skipped`);
+      return;
+    }
+    precheckInFlight.add(job.name);
+    const precheckTimeoutMs = (job.precheckTimeoutSeconds ?? DEFAULT_PRECHECK_TIMEOUT_SECONDS) * 1000;
+    runPrecheck(job.precheck, precheckTimeoutMs)
+      .then((pc) => {
+        if (pc.decision === "run") {
+          console.log(`[${ts()}] Job ${job.name}: precheck passed, running`);
+          startJobRun(job, pc.stdout);
+          return;
+        }
+        jobLastResult.set(job.name, { result: pc.decision === "skip" ? "skipped" : "error", ranAt: Date.now() });
+        if (pc.decision === "error") {
+          const why = pc.timedOut ? `timed out after ${precheckTimeoutMs / 1000}s` : `exit ${pc.exitCode}`;
+          console.error(`[${ts()}] ERROR Job ${job.name}: precheck failed (${why}): ${pc.stderr.trim().slice(0, 500)}`);
+        }
+        updateState();
+      })
+      .catch((err) => {
+        jobLastResult.set(job.name, { result: "error", ranAt: Date.now() });
+        console.error(`[${ts()}] ERROR Job ${job.name}: precheck could not start:`, err);
+      })
+      .finally(() => precheckInFlight.delete(job.name));
+  }
+
+  function startJobRun(job: (typeof currentJobs)[0], precheckStdout: string) {
     const timeoutMs = job.timeoutSeconds ? job.timeoutSeconds * 1000 : undefined;
     snapshotJobFrontmatter(job.name)
       .then((restoreFrontmatter) =>
         resolvePrompt(job.prompt)
-          .then((prompt) => {
+          .then(async (prompt) => {
+            if (job.freshSession && !job.agent) await removeThreadSession(job.name);
             const clock = buildClockPromptPrefix(new Date(), currentSettings.timezoneOffsetMinutes);
             return run(
               job.name,
-              `${clock}\n${prompt}`,
+              `${clock}\n${promptWithPrecheckOutput(prompt, precheckStdout)}`,
               job.agent ? `agent:${job.agent}` : job.name,
               job.model,
               timeoutMs,

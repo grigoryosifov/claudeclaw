@@ -224,3 +224,84 @@ describe("shouldForwardJobResult (silent sentinel)", () => {
     expect(shouldForwardJobResult(true, 0, "report mentioning [silent] mid-text")).toBe(true);
   });
 });
+
+// ─── precheck + fresh_session ─────────────────────────────────────────────
+
+describe("precheck + fresh_session frontmatter", () => {
+  beforeEach(resetSandbox);
+
+  test("parses precheck, precheck_timeout and fresh_session", async () => {
+    await writeFile(
+      join(LEGACY_JOBS_DIR, "inbox.md"),
+      jobMd("*/5 * * * *", "Process the inbox", 'precheck: "bash ~/scripts/inbox-check.sh"\nprecheck_timeout: 120\nfresh_session: true')
+    );
+    const [job] = await loadJobsInSandbox();
+    expect(job.precheck).toBe("bash ~/scripts/inbox-check.sh");
+    expect(job.precheckTimeoutSeconds).toBe(120);
+    expect(job.freshSession).toBe(true);
+  });
+
+  test("absent keys stay undefined (existing jobs unchanged)", async () => {
+    await writeFile(join(LEGACY_JOBS_DIR, "plain.md"), jobMd("0 3 * * *", "Nightly"));
+    const [job] = await loadJobsInSandbox();
+    expect(job.precheck).toBeUndefined();
+    expect(job.precheckTimeoutSeconds).toBeUndefined();
+    expect(job.freshSession).toBeUndefined();
+  });
+
+  test("fresh_session: false is not fresh", async () => {
+    await writeFile(join(LEGACY_JOBS_DIR, "f.md"), jobMd("0 3 * * *", "x", "fresh_session: false"));
+    const [job] = await loadJobsInSandbox();
+    expect(job.freshSession).toBeUndefined();
+  });
+});
+
+describe("runPrecheck", () => {
+  test("exit 0 → run, stdout captured", async () => {
+    const { runPrecheck } = await import("../jobs");
+    const r = await runPrecheck("echo new-video.mov; exit 0", 5000);
+    expect(r.decision).toBe("run");
+    expect(r.stdout.trim()).toBe("new-video.mov");
+  });
+
+  test("exit 1 → skip", async () => {
+    const { runPrecheck } = await import("../jobs");
+    const r = await runPrecheck("exit 1", 5000);
+    expect(r.decision).toBe("skip");
+    expect(r.exitCode).toBe(1);
+  });
+
+  test("other exit → error with stderr", async () => {
+    const { runPrecheck } = await import("../jobs");
+    const r = await runPrecheck("echo boom >&2; exit 3", 5000);
+    expect(r.decision).toBe("error");
+    expect(r.exitCode).toBe(3);
+    expect(r.stderr.trim()).toBe("boom");
+  });
+
+  test("timeout → error, process killed", async () => {
+    const { runPrecheck } = await import("../jobs");
+    const t0 = Date.now();
+    const r = await runPrecheck("sleep 30", 300);
+    expect(r.decision).toBe("error");
+    expect(r.timedOut).toBe(true);
+    expect(Date.now() - t0).toBeLessThan(5000);
+  });
+
+  test("runs in the given cwd", async () => {
+    const { runPrecheck } = await import("../jobs");
+    const r = await runPrecheck("pwd -P", 5000, "/tmp");
+    expect(r.stdout.trim()).toBe("/private/tmp");
+  });
+});
+
+describe("promptWithPrecheckOutput", () => {
+  test("appends trimmed stdout under a header", async () => {
+    const { promptWithPrecheckOutput } = await import("../jobs");
+    expect(promptWithPrecheckOutput("Do it", "a.mov\nb.mov\n")).toBe("Do it\n\nPrecheck output:\na.mov\nb.mov");
+  });
+  test("empty stdout leaves the prompt as is", async () => {
+    const { promptWithPrecheckOutput } = await import("../jobs");
+    expect(promptWithPrecheckOutput("Do it", "  \n")).toBe("Do it");
+  });
+});
