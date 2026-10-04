@@ -118,6 +118,12 @@ Legacy compatibility: `daily` is still accepted in existing job files.
 
 Logs are always written to `.claude/claudeclaw/logs/` regardless of the `notify` setting.
 
+**`precheck`**: a shell command the daemon runs before each scheduled run, in its own process. Exit 0 runs Claude with the command's stdout appended to the prompt; exit 1 skips the tick at zero cost; any other exit or a timeout (`precheck_timeout`, seconds, default 300) logs an ERROR and skips.
+
+**`fresh_session`**: `true` starts every run in a new session instead of resuming the job's thread (ignored for agent-scoped jobs).
+
+**Never schedule Claude to find out whether there is work.** A polling job (inbox, folder, queue, "has X happened yet?") puts that test in `precheck`, sets `fresh_session: true` and an explicit `model`. Without them every tick wakes Claude and re-reads the job's whole history just to answer `[silent]`; `[silent]` hides the message, not the cost.
+
 | Expression       | Meaning                  |
 |------------------|--------------------------|
 | `* * * * *`      | Every minute             |
