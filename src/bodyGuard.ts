@@ -8,11 +8,33 @@
  * few MB makes the upload die (`API Error: Connection dropped (ECONNRESET)`), and
  * /compact cannot help on its own because it uploads the same body.
  *
- * Before a resumed run the guard measures that body; past the limit it replaces
- * older screenshots with a text placeholder (backup beside the transcript), and the
- * caller compacts when stripping alone does not bring it under the limit.
+ * Default mode is on-error: when a resumed run fails with an upload error, the runner
+ * replaces older screenshots with a text placeholder (backup beside the transcript),
+ * compacts when the body is still large, and continues the turn once. An optional
+ * preemptive mode (session.maxBodyMb > 0) does the same before a run whose body is
+ * already over the limit.
  */
 import { copyFileSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+
+/** Transport failures of the request upload, as Claude Code and the TLS layer report them. */
+const UPLOAD_ERROR = /API Error: Connection (dropped|error)|ECONNRESET|bad record mac|socket hang up|\bEPIPE\b/i;
+
+export function isUploadError(text: string): boolean {
+  return UPLOAD_ERROR.test(text);
+}
+
+/** The prompt that resumes a turn cut off by an upload error, without repeating side effects. */
+export function continuationPrompt(original: string): string {
+  return (
+    "[claudeclaw] Your previous turn on the message below was cut off by a network error while the " +
+    "conversation was uploading (ECONNRESET). Older screenshots in this conversation were replaced with " +
+    "placeholders to make the upload smaller. Continue the task from where it stopped: check what you " +
+    "already did in this conversation and do not repeat anything that already took effect (messages " +
+    "sent, files written, posts published, emails drafted). Then answer the message.\n\n" +
+    "The original message:\n\n" +
+    original
+  );
+}
 
 export const IMAGE_PLACEHOLDER =
   "[screenshot removed by the claudeclaw body guard to keep the request under the upload limit]";

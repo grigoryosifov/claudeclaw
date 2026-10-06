@@ -88,7 +88,7 @@ const DEFAULT_SETTINGS: Settings = {
   sessionTimeoutMs: DEFAULT_SESSION_TIMEOUT_MS,
   timeouts: { telegram: 5, heartbeat: 15, job: 30, default: 5 },
   watchdog: { maxConsecutiveTimeouts: null, maxRuntimeSeconds: null },
-  session: { autoRotate: false, maxMessages: 50, maxAgeHours: 24, summaryPath: "", maxBodyMb: 4 },
+  session: { autoRotate: false, maxMessages: 50, maxAgeHours: 24, summaryPath: "", recoverOnUploadError: true, compactAboveMb: 4, maxBodyMb: 0 },
   plugins: {},
 };
 
@@ -246,8 +246,14 @@ export interface SessionConfig {
   maxAgeHours: number;
   /** Directory to write markdown summaries before rotation. Empty string disables summaries. */
   summaryPath: string;
-  /** Before a resumed run, keep the uploaded session body under this many MB: strip older
-   *  screenshots, then /compact if still over. 0 disables. Default: 4. */
+  /** When a resumed run fails with an upload error (ECONNRESET and kin), strip older
+   *  screenshots, /compact if the body is still over compactAboveMb, and continue the turn
+   *  once. Default: true. */
+  recoverOnUploadError: boolean;
+  /** Body size above which the upload-error recovery also runs /compact. Default: 4. */
+  compactAboveMb: number;
+  /** Preemptive mode: before every resumed run, apply the same shrink when the body is
+   *  already over this many MB. 0 disables. Default: 0 (on-error only). */
   maxBodyMb: number;
 }
 
@@ -438,7 +444,9 @@ function parseSettings(
       maxMessages: Number.isFinite(raw.session?.maxMessages) ? Number(raw.session.maxMessages) : 50,
       maxAgeHours: Number.isFinite(raw.session?.maxAgeHours) ? Number(raw.session.maxAgeHours) : 24,
       summaryPath: typeof raw.session?.summaryPath === "string" ? raw.session.summaryPath.trim() : "",
-      maxBodyMb: Number.isFinite(raw.session?.maxBodyMb) && Number(raw.session.maxBodyMb) >= 0 ? Number(raw.session.maxBodyMb) : 4,
+      recoverOnUploadError: raw.session?.recoverOnUploadError !== false,
+      compactAboveMb: Number.isFinite(raw.session?.compactAboveMb) && Number(raw.session.compactAboveMb) >= 0 ? Number(raw.session.compactAboveMb) : 4,
+      maxBodyMb: Number.isFinite(raw.session?.maxBodyMb) && Number(raw.session.maxBodyMb) >= 0 ? Number(raw.session.maxBodyMb) : 0,
     },
     apiToken: typeof raw.apiToken === "string" && raw.apiToken.trim() ? raw.apiToken.trim() : undefined,
     ...(typeof raw.jobsDir === "string" && raw.jobsDir.trim() ? { jobsDir: raw.jobsDir.trim() } : {}),

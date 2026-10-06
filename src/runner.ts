@@ -33,7 +33,7 @@ import { getPluginManager, type EventContext } from "./plugins";
 import { claudeClawDir } from "./paths";
 import { readBotIdentity } from "./botIdentity";
 import { findSessionJsonlPath } from "./sessionFiles";
-import { guardSessionBody } from "./bodyGuard";
+import { guardSessionBody, isUploadError, continuationPrompt } from "./bodyGuard";
 
 const LOGS_DIR = join(claudeClawDir(), "logs");
 const ACTIVE_RUNS_FILE = join(claudeClawDir(), "active-runs");
@@ -964,6 +964,39 @@ async function guardBody(
   }
 }
 
+/**
+ * After an upload error: strip older screenshots, compact when the body is still over
+ * `compactAboveMb`. Returns true when the transcript got smaller (worth one retry).
+ */
+async function shrinkAfterUploadError(
+  sessionId: string,
+  compactAboveMb: number,
+  config: ModelConfig,
+  securityArgs: string[],
+  timeoutMs: number
+): Promise<boolean> {
+  const ts = () => new Date().toLocaleTimeString();
+  const mb = (n: number) => (n / 1024 / 1024).toFixed(2);
+  try {
+    const path = findSessionJsonlPath(sessionId);
+    if (!path) return false;
+    const r = guardSessionBody(path, 0);
+    if (!r) return false;
+    console.log(
+      `[${ts()}] Body guard (upload error): session ${sessionId.slice(0, 8)} body ${mb(r.before.bytes)} MB; ` +
+        `stripped ${r.removed} screenshot(s) → ${mb(r.after.bytes)} MB${r.backup ? ` (backup ${basename(r.backup)})` : ""}`
+    );
+    let compacted = false;
+    if (compactAboveMb > 0 && r.after.bytes > compactAboveMb * 1024 * 1024) {
+      compacted = await runCompact(sessionId, config.model, config.api, cleanSpawnEnv(), securityArgs, timeoutMs);
+    }
+    return r.removed > 0 || compacted;
+  } catch (e) {
+    console.warn(`[${ts()}] Body guard (upload error) failed for ${sessionId.slice(0, 8)}:`, e);
+    return false;
+  }
+}
+
 /** Run /compact on the current session to reduce context size. */
 export async function runCompact(
   sessionId: string,
@@ -1271,6 +1304,36 @@ async function execClaude(
   }
 
   let recoveredFromStale = false;
+
+  // --- Upload-error recovery (session body guard, on-error mode) ---
+  // The request upload died (ECONNRESET after Claude Code's own retry ladder). Shrink the
+  // transcript and continue the turn once, telling Claude not to repeat what already ran.
+  if (
+    !isNew &&
+    existing &&
+    exitCode !== 0 &&
+    !usedFallback &&
+    settings.session.recoverOnUploadError &&
+    !extractRateLimitMessage(rawStdout, stderr) &&
+    isUploadError(`${rawStdout}\n${stderr}`)
+  ) {
+    const shrunk = await shrinkAfterUploadError(
+      existing.sessionId, settings.session.compactAboveMb, primaryConfig, securityArgs, timeoutMs
+    );
+    if (shrunk) {
+      const retryArgs = withOutputFormat(args.slice(), "stream-json");
+      retryArgs[2] = continuationPrompt(prompt);
+      console.log(`[${new Date().toLocaleTimeString()}] Upload recovery: continuing ${name} on session ${existing.sessionId.slice(0, 8)}`);
+      exec = await runClaudeStream(retryArgs, primaryConfig.model, primaryConfig.api, baseEnv, timeoutMs, spawnCwd, onChunk, onToolEvent);
+      rawStdout = exec.rawStdout;
+      stderr = exec.stderr;
+      exitCode = exec.exitCode;
+      stdout = rawStdout;
+      console.log(`[${new Date().toLocaleTimeString()}] Upload recovery: ${exitCode === 0 ? "succeeded" : `failed again (exit ${exitCode})`}`);
+    } else {
+      console.warn(`[${new Date().toLocaleTimeString()}] Upload error on ${existing.sessionId.slice(0, 8)}, nothing to shrink; not retrying`);
+    }
+  }
 
   // --- Stale session recovery ---
   // Claude Code returns "No conversation found with session ID: <id>" when
