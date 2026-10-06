@@ -31,8 +31,12 @@ process.stdout.write(JSON.stringify(jobs));
 `;
   const scriptPath = join(TEST_ROOT, "_run.ts");
   await writeFile(scriptPath, script);
+  // The child must resolve jobs from TEST_ROOT, so a CLAUDECLAW_HOME inherited from a
+  // bot session running the suite must not point it at that bot's real jobs.
+  const { CLAUDECLAW_HOME: _ignored, ...env } = process.env;
   const proc = Bun.spawn(["bun", "run", scriptPath], {
     cwd: TEST_ROOT,
+    env,
     stdout: "pipe",
     stderr: "pipe",
   });
