@@ -1,5 +1,5 @@
 import { mkdir, readFile, writeFile, realpath } from "fs/promises";
-import { join, dirname, resolve, sep } from "path";
+import { join, dirname, resolve, sep, basename } from "path";
 import { execSync } from "child_process";
 import { existsSync, writeFileSync, mkdirSync, readFileSync } from "fs";
 import {
@@ -32,6 +32,8 @@ import { recordResult, abortReason, clearSession, startSession } from "./watchdo
 import { getPluginManager, type EventContext } from "./plugins";
 import { claudeClawDir } from "./paths";
 import { readBotIdentity } from "./botIdentity";
+import { findSessionJsonlPath } from "./sessionFiles";
+import { guardSessionBody } from "./bodyGuard";
 
 const LOGS_DIR = join(claudeClawDir(), "logs");
 const ACTIVE_RUNS_FILE = join(claudeClawDir(), "active-runs");
@@ -930,6 +932,38 @@ export async function loadHeartbeatPromptTemplate(): Promise<string> {
   return "";
 }
 
+/**
+ * Keep a resumed session's upload under `maxBodyMb` (see src/bodyGuard.ts). Runs inside
+ * the serial lane before the claude child starts, so nothing else is writing the session.
+ * Never throws: a guard failure logs and the run proceeds as before.
+ */
+async function guardBody(
+  sessionId: string,
+  maxBodyMb: number,
+  config: ModelConfig,
+  securityArgs: string[],
+  timeoutMs: number
+): Promise<void> {
+  if (!(maxBodyMb > 0)) return;
+  const ts = () => new Date().toLocaleTimeString();
+  try {
+    const path = findSessionJsonlPath(sessionId);
+    if (!path) return;
+    const r = guardSessionBody(path, maxBodyMb * 1024 * 1024);
+    if (!r) return;
+    const mb = (n: number) => (n / 1024 / 1024).toFixed(2);
+    console.log(
+      `[${ts()}] Body guard: session ${sessionId.slice(0, 8)} body ${mb(r.before.bytes)} MB > ${maxBodyMb} MB; ` +
+        `stripped ${r.removed} screenshot(s) → ${mb(r.after.bytes)} MB${r.backup ? ` (backup ${basename(r.backup)})` : ""}`
+    );
+    if (r.needsCompact) {
+      await runCompact(sessionId, config.model, config.api, cleanSpawnEnv(), securityArgs, timeoutMs);
+    }
+  } catch (e) {
+    console.warn(`[${ts()}] Body guard failed for ${sessionId.slice(0, 8)}; running without it:`, e);
+  }
+}
+
 /** Run /compact on the current session to reduce context size. */
 export async function runCompact(
   sessionId: string,
@@ -1082,6 +1116,10 @@ async function execClaude(
   };
   const securityArgs = buildSecurityArgs(security);
   const timeoutMs = timeoutMsOverride ?? resolveTimeoutMs(timeoutCategory ?? name);
+
+  if (!isNew) {
+    await guardBody(existing.sessionId, settings.session.maxBodyMb, primaryConfig, securityArgs, timeoutMs);
+  }
 
   console.log(
     `[${new Date().toLocaleTimeString()}] Running: ${name} (${isNew ? "new session" : `resume ${existing.sessionId.slice(0, 8)}`}, security: ${security.level}, timeout: ${timeoutMs / 60_000}m)`
