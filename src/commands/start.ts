@@ -927,6 +927,12 @@ export async function start(args: string[] = []) {
               result: r.exitCode === 0 ? "ok" : "error",
               ranAt: Date.now(),
             });
+            if (r.exitCode !== 0) {
+              // stderr is what the fleet failure scanner reads (launchd.err); without this line a
+              // notify:false job that dies ("Prompt is too long") leaves only a Done: line on stdout.
+              const head = (r.stdout || r.stderr || "").trim().split("\n")[0]?.slice(0, 200) ?? "";
+              console.error(`[${ts()}] ERROR Job ${job.name} failed (exit ${r.exitCode}): ${head}`);
+            }
             if (r.exitCode === 0) {
               jobRetryState.delete(job.name);
             } else if (job.retry && job.retry > 0) {

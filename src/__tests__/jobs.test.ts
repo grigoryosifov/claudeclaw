@@ -245,12 +245,12 @@ describe("precheck + fresh_session frontmatter", () => {
     expect(job.freshSession).toBe(true);
   });
 
-  test("absent keys stay undefined (existing jobs unchanged)", async () => {
+  test("absent precheck keys stay undefined; a job without fresh_session starts fresh", async () => {
     await writeFile(join(LEGACY_JOBS_DIR, "plain.md"), jobMd("0 3 * * *", "Nightly"));
     const [job] = await loadJobsInSandbox();
     expect(job.precheck).toBeUndefined();
     expect(job.precheckTimeoutSeconds).toBeUndefined();
-    expect(job.freshSession).toBeUndefined();
+    expect(job.freshSession).toBe(true);
   });
 
   test("fresh_session: false is not fresh", async () => {

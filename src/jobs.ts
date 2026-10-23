@@ -197,7 +197,11 @@ function parseJobFile(name: string, content: string): Job | null {
 
   const freshLine = lines.find((l) => l.startsWith("fresh_session:"));
   const freshRaw = freshLine ? parseFrontmatterValue(freshLine.replace("fresh_session:", "")).toLowerCase() : "";
-  const freshSession = freshRaw === "true" || freshRaw === "yes" || freshRaw === "1" ? true : undefined;
+  // Jobs start fresh by default: a job never needs the previous run's memory (that surface is the
+  // heartbeat), and a thread resumed forever overflows the context window ("Prompt is too long":
+  // the medic after 80 daily resumes, 14.10.2026; a weekly job after 15 resumes, 23.10.2026).
+  // `fresh_session: false` opts a job into resuming its thread.
+  const freshSession = freshRaw === "false" || freshRaw === "no" || freshRaw === "0" ? undefined : true;
 
   return {
     name, schedule, prompt, recurring, notify, model, timeoutSeconds, agent, label, enabled, retry, retryDelay,
