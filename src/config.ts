@@ -1,3 +1,4 @@
+import { type CopyHeaderConfig, parseCopyHeader } from "./copyHeader";
 import { join, isAbsolute } from "path";
 import { mkdir } from "fs/promises";
 import { existsSync } from "fs";
@@ -104,12 +105,16 @@ export interface HeartbeatConfig {
   prompt: string;
   excludeWindows: HeartbeatExcludeWindow[];
   forwardToTelegram: boolean;
+  /** Human name of the heartbeat automation, used in the operator's copy header. */
+  title?: string;
 }
 
 export interface TelegramConfig {
   token: string;
   allowedUserIds: number[];
   listenChats: number[];
+  /** Operator's copy header (see src/copyHeader.ts); absent = no header. */
+  copyHeader?: CopyHeaderConfig;
   /** When false, skip Telegram polling (incoming messages). Useful for send-only instances. Default: true */
   receiveEnabled: boolean;
   /**
@@ -354,6 +359,7 @@ function parseSettings(
       prompt: raw.heartbeat?.prompt ?? "",
       excludeWindows: parseExcludeWindows(raw.heartbeat?.excludeWindows),
       forwardToTelegram: raw.heartbeat?.forwardToTelegram ?? false,
+      ...(typeof raw.heartbeat?.title === "string" && raw.heartbeat.title.trim() ? { title: raw.heartbeat.title.trim() } : {}),
     },
     telegram: {
       token: process.env.TELEGRAM_TOKEN?.trim() || (typeof raw.telegram?.token === "string" ? raw.telegram.token.trim() : ""),
@@ -361,6 +367,7 @@ function parseSettings(
       listenChats: Array.isArray(raw.telegram?.listenChats) ? raw.telegram.listenChats.map(Number) : [],
       receiveEnabled: raw.telegram?.receiveEnabled !== false,
       dmIsolation: raw.telegram?.dmIsolation === "perUser" ? "perUser" : "shared",
+      ...(parseCopyHeader(raw.telegram?.copyHeader) ? { copyHeader: parseCopyHeader(raw.telegram?.copyHeader) } : {}),
       streaming: raw.telegram?.streaming === "draft" || raw.telegram?.streaming === "off" ? raw.telegram.streaming : "edit",
       ...(typeof raw.telegram?.whisperModel === "string" && raw.telegram.whisperModel.trim()
         ? { whisperModel: raw.telegram.whisperModel.trim() }

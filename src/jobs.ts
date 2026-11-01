@@ -38,6 +38,8 @@ export interface Job {
    * whose session is the agent's own.
    */
   freshSession?: boolean;
+  /** Human name of the automation (frontmatter `title:`), used in the operator's copy header. */
+  title?: string;
 }
 
 export const DEFAULT_PRECHECK_TIMEOUT_SECONDS = 300;
@@ -195,6 +197,8 @@ function parseJobFile(name: string, content: string): Job | null {
   const precheckTimeoutSeconds =
     Number.isFinite(precheckTimeoutParsed) && precheckTimeoutParsed > 0 ? precheckTimeoutParsed : undefined;
 
+  const titleLine = lines.find((l) => l.startsWith("title:"));
+  const title = titleLine ? parseFrontmatterValue(titleLine.replace("title:", "")).trim() || undefined : undefined;
   const freshLine = lines.find((l) => l.startsWith("fresh_session:"));
   const freshRaw = freshLine ? parseFrontmatterValue(freshLine.replace("fresh_session:", "")).toLowerCase() : "";
   // Jobs start fresh by default: a job never needs the previous run's memory (that surface is the
@@ -205,7 +209,7 @@ function parseJobFile(name: string, content: string): Job | null {
 
   return {
     name, schedule, prompt, recurring, notify, model, timeoutSeconds, agent, label, enabled, retry, retryDelay,
-    precheck, precheckTimeoutSeconds, freshSession,
+    precheck, precheckTimeoutSeconds, freshSession, title,
   };
 }
 

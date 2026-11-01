@@ -1,3 +1,4 @@
+import { automationTitle, copyHeaderFor } from "../copyHeader";
 import { writeFile, unlink, mkdir } from "fs/promises";
 import { extractErrorDetail } from "../messaging";
 import { join } from "path";
@@ -630,13 +631,16 @@ export async function start(args: string[] = []) {
     }
   }
 
-  function forwardToTelegram(label: string, result: { exitCode: number; stdout: string; stderr: string }) {
+  function forwardToTelegram(label: string, result: { exitCode: number; stdout: string; stderr: string }, title?: string) {
     if (!telegramSend || currentSettings.telegram.allowedUserIds.length === 0) return;
     const text = result.exitCode === 0
       ? `${label ? `[${label}]\n` : ""}${result.stdout || "(empty)"}`
       : `${label ? `[${label}] ` : ""}error (exit ${result.exitCode}): ${extractErrorDetail(result) || "Unknown"}`;
-    for (const userId of currentSettings.telegram.allowedUserIds) {
-      telegramSend(userId, text).catch((err) =>
+    const recipients = currentSettings.telegram.allowedUserIds;
+    const automation = automationTitle(label || "heartbeat", title);
+    for (const userId of recipients) {
+      const header = copyHeaderFor(currentSettings.telegram.copyHeader, userId, recipients, automation);
+      telegramSend(userId, header + text).catch((err) =>
         console.error(`[Telegram] Failed to forward to ${userId}: ${err}`)
       );
     }
@@ -727,7 +731,7 @@ export async function start(args: string[] = []) {
           const shouldSuppress = normalized.startsWith("HEARTBEAT_OK") || normalized.endsWith("HEARTBEAT_OK");
           const shouldForward = currentSettings.heartbeat.forwardToTelegram || !shouldSuppress;
           if (shouldForward) {
-            forwardToTelegram("", r);
+            forwardToTelegram("", r, currentSettings.heartbeat.title);
             forwardToDiscord("", r);
           }
         });
@@ -955,7 +959,7 @@ export async function start(args: string[] = []) {
               }
               return;
             }
-            forwardToTelegram(job.name, r);
+            forwardToTelegram(job.name, r, job.title);
             forwardToDiscord(job.name, r);
           })
           .finally(async () => {
