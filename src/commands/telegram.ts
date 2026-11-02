@@ -19,6 +19,7 @@ import { isWizardTrigger, hasActiveWizard, handleWizardInput } from "./plugin-wi
 import { callApi, TELEGRAM_API_BASE as API_BASE } from "../telegramApi";
 import { markdownToTelegramHtml, normalizeTelegramText, renderTelegramChunks } from "../telegramText";
 import { deliverFinalReply, resolveStreamingMode, sendChunks, type StreamingMode, type TelegramApiCall } from "../telegramDeliver";
+import { CONTINUE_PREFIX, StoppedStore, handleContinueTap, sendStopped } from "../telegramContinue";
 
 // --- Telegram Bot API (raw fetch, zero deps) ---
 
@@ -390,6 +391,8 @@ const MODEL_OPUS = "claude-opus-5-5";
 const activeDrafts = new Map<number, number>();
 /** Chats whose running reply was stopped via the draft's Stop button (reported as "Stopped", not as an error). */
 const stoppedByUser = new Set<number>();
+/** Stopped messages the "▶️ Continue" button can re-run (process-local: a restart empties it). */
+const stoppedMessages = new StoppedStore<TelegramMessage>();
 
 /**
  * Build a streaming callback.
@@ -1466,7 +1469,10 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     streamMsgId = streamResult.msgId;
 
     if (result.exitCode !== 0 && stoppedByUser.delete(chatId)) {
-      await sendMessage(config.token, chatId, "⏹ Stopped.", threadId);
+      const continueId = stoppedMessages.remember(message);
+      await sendStopped(bindApi(config.token), chatId, threadId, continueId).catch(() =>
+        sendMessage(config.token, chatId, "⏹ Stopped.", threadId)
+      );
     } else if (result.exitCode !== 0) {
       const isTimedOut = result.exitCode === 124;
       const errorMsg = isTimedOut
@@ -1564,6 +1570,18 @@ async function handleCallbackQuery(query: TelegramCallbackQuery): Promise<void> 
       callback_query_id: query.id,
       text: "Unauthorized.",
     }).catch(() => {});
+    return;
+  }
+
+  // "▶️ Continue" on a "⏹ Stopped." message: re-run the stopped message as if it were sent again.
+  if (data.startsWith(CONTINUE_PREFIX)) {
+    const chatForLog = query.message?.chat.id ?? query.from.id;
+    const outcome = await handleContinueTap(bindApi(config.token), query, stoppedMessages, (stopped) => {
+      handleMessage(stopped).catch((err) => {
+        console.error(`[Telegram] Continue re-run failed in chat ${chatForLog}: ${err instanceof Error ? err.message : err}`);
+      });
+    });
+    console.log(`[Telegram] Continue pressed in chat ${chatForLog} — ${outcome === "continued" ? "re-running the stopped message" : "nothing to continue"}`);
     return;
   }
 
