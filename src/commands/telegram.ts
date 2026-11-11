@@ -386,6 +386,9 @@ const chatModels = new Map<number, string>();
 const MODEL_HAIKU = "claude-haiku-4-5-20251001";
 const MODEL_SONNET = "claude-sonnet-4-6";
 const MODEL_OPUS = "claude-opus-5-5";
+// Claude Code's own alias: the CLI resolves it to the newest Fable it knows (claude-fable-5-2 on 2.1.322),
+// so /modelfable follows each Fable release through the CLI's auto-update with no id to bump here.
+const MODEL_FABLE = "fable";
 
 /** Draft ids of in-flight draft-mode replies per chat — lets a Stop-button update find the run it belongs to. */
 const activeDrafts = new Map<number, number>();
@@ -1154,10 +1157,10 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     const settings = getSettings();
     const defaultModel = settings.model || "default";
     if (!currentModel) {
-      await sendMessage(config.token, chatId, `📊 Current model: **${defaultModel}** (default)\n\nAvailable:\n• /modelhaiku - Fastest, least capable\n• /modelsonnet - Balanced (default)\n• /modelopus - Most capable, slower\n• /modeldefault - Use config default`, threadId);
+      await sendMessage(config.token, chatId, `📊 Current model: **${defaultModel}** (default)\n\nAvailable:\n• /modelhaiku - Fastest, least capable\n• /modelsonnet - Balanced (default)\n• /modelopus - Most capable, slower\n• /modelfable - Latest Fable\n• /modeldefault - Use config default`, threadId);
     } else {
-      const modelName = currentModel === MODEL_HAIKU ? "Haiku" : currentModel === MODEL_SONNET ? "Sonnet" : currentModel === MODEL_OPUS ? "Opus" : currentModel;
-      await sendMessage(config.token, chatId, `📊 Current model: **${modelName}**\n\nAvailable:\n• /modelhaiku - Fastest, least capable\n• /modelsonnet - Balanced\n• /modelopus - Most capable, slower\n• /modeldefault - Use config default (${defaultModel})`, threadId);
+      const modelName = currentModel === MODEL_HAIKU ? "Haiku" : currentModel === MODEL_SONNET ? "Sonnet" : currentModel === MODEL_OPUS ? "Opus" : currentModel === MODEL_FABLE ? "Fable (latest)" : currentModel;
+      await sendMessage(config.token, chatId, `📊 Current model: **${modelName}**\n\nAvailable:\n• /modelhaiku - Fastest, least capable\n• /modelsonnet - Balanced\n• /modelopus - Most capable, slower\n• /modelfable - Latest Fable\n• /modeldefault - Use config default (${defaultModel})`, threadId);
     }
     return;
   }
@@ -1177,6 +1180,12 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
   if (command === "/modelopus") {
     chatModels.set(chatId, MODEL_OPUS);
     await sendMessage(config.token, chatId, "🧠 Switched to Opus - most capable, slower responses.", threadId);
+    return;
+  }
+
+  if (command === "/modelfable") {
+    chatModels.set(chatId, MODEL_FABLE);
+    await sendMessage(config.token, chatId, "✨ Switched to Fable — the newest Fable model Claude Code knows.", threadId);
     return;
   }
 
@@ -1704,6 +1713,7 @@ async function registerBotCommands(token: string): Promise<void> {
       { command: "modelhaiku", description: "⚡ Switch to Haiku (fastest)" },
       { command: "modelsonnet", description: "⚖️ Switch to Sonnet (balanced)" },
       { command: "modelopus", description: "🧠 Switch to Opus (most capable)" },
+      { command: "modelfable", description: "✨ Switch to the latest Fable" },
       { command: "modeldefault", description: "🔄 Reset to config default model" },
       // Mode toggles
       { command: "mode", description: "🔐 Get or set Claude permission mode" },
@@ -1732,7 +1742,7 @@ async function registerBotCommands(token: string): Promise<void> {
     // skills with 256-char descriptions exceed. Progressively shrink the per-command
     // description cap until Telegram accepts the full menu; only fall back to built-in
     // commands if even terse descriptions overflow.
-    const builtinNames = ["start", "reset", "compact", "status", "context", "kill", "verbose", "fork", "mode", "model", "modelhaiku", "modelsonnet", "modelopus", "modeldefault"];
+    const builtinNames = ["start", "reset", "compact", "status", "context", "kill", "verbose", "fork", "mode", "model", "modelhaiku", "modelsonnet", "modelopus", "modelfable", "modeldefault"];
     let registered = false;
     for (const cap of [256, 96, 64, 40]) {
       const payload = commands.map((c) => ({ command: c.command, description: c.description.slice(0, cap) || c.command }));
